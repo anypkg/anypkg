@@ -4,16 +4,16 @@ require('console.table');
 
 var MetaManager = require('./')
 
-var manager = new MetaManager(require('./platformDetector')())
+var manager = new MetaManager()
 
 var formatter = function(err, data){
   if(err)
-    console.log('ERR - ', JSON.stringify(err))
+    console.error('ERR - ', JSON.stringify(err))
   else
     if(data instanceof Array)
       console.table(data)
     else
-      console.log(data)
+      console.info(data)
 }
 
 program
@@ -31,6 +31,13 @@ program
   .description('install a meta, in specified version if provided')
   .action(function(id, version) {
     manager.install(id, formatter)
+  });
+
+program
+  .command('search <id> [version]')
+  .description('search for a meta, in specified version if provided')
+  .action(function(id, version) {
+    manager.search(id, formatter)
   });
 
 program

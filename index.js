@@ -1,12 +1,25 @@
-var child = require('child_process');
-var shellParser = require('node-shell-parser');
-var Pouch = require('pouchdb')
+const os = require('os')
+const child = require('child_process')
+const shellParser = require('node-shell-parser')
+const Pouch = require('pouchdb')
 
-var pkgdb = new Pouch('http://havn.cloudant.com/anypkg')
+const pkgdb = new Pouch('http://havn.cloudant.com/anypkg')
 
 module.exports = function(platform, options){
   if(!platform)
-    throw "No platform specified"
+    switch (os.type()) {
+    case 'Windows_NT':
+      var platform = require('./platforms/choco')
+      break;
+    case 'Darwin':
+      var platform = require('./platforms/brew')
+      break;
+    case 'Linux':
+      var platform = require('./platforms/apt')
+      break;
+    default:
+      throw 'Unsupported os.type() and no platform specified'
+    }
   this.platform = platform
 
   this.options = options || {}
@@ -29,10 +42,12 @@ module.exports.prototype.list = function(cb){
 }
 
 module.exports.prototype.search = function(pkg_name, cb){
-  pkgdb.query('packages/byPlatformPkgNameVersion', { include_docs: true, key: [this.platform.pkg_mgr, ref, version]})
+  var platform = this.platform
+  var version = 'latest'
+  pkgdb.query('packages/byPlatformPkgNameVersion', { include_docs: true, key: [platform.pkg_mgr, pkg_name, version]})
   .then(function(result){
     if(result.rows.length > 1)
-      console.log('Multiple matching packages found, aborting', result)
+      console.error('Multiple matching packages found, aborting', result)
     else {
       var doc = result.rows[0].doc
       var process = child.exec([this.platform.cmd.install, doc.ref].join(' '), function(err, stdout, stderr){
@@ -45,35 +60,40 @@ module.exports.prototype.search = function(pkg_name, cb){
   }.bind(this))
   .catch(function(err){
     if(err.status && err.status === 404)
-      console.log('Not found:', ref)
+      console.error('Not found:', ref)
     else
-      console.log('ERR',err)
+      console.error('ERR',err)
   })
 }
 
 module.exports.prototype.install = function(ref, cb){
-  if(!version)
-    var version = 'latest'
+  var platform = this.platform
+  var nativeRef = ref
+  var version = 'latest'
 
-  pkgdb.query('packages/byPlatformPkgNameVersion', { include_docs: true, key: [this.platform.pkg_mgr, ref, version]})
+  pkgdb.query('packages/byPlatformPkgNameVersion', { include_docs: true, key: [platform.pkg_mgr, ref, version]})
   .then(function(result){
     if(result.rows.length > 1)
-      console.log('Multiple matching packages found, aborting', result)
+      console.error('Multiple matching packages found, aborting', result)
     else {
-      var doc = result.rows[0].doc
-      var process = child.exec([this.platform.cmd.install, doc.ref].join(' '), function(err, stdout, stderr){
+      if(result.rows.length == 0){
+        console.info('Not found: ', nativeRef)
+        console.info('Trying native package')
+        var ref = nativeRef;
+      }else{
+        console.info('Found: ', result.rows[0].doc)
+        var ref = result.rows[0].doc.ref
+      }
+      var process = child.exec([platform.cmd.install, ref].join(' '), function(err, stdout, stderr){
         if(err || stderr)
           cb(err, stderr)
         else
           cb(null, stdout)
       });
     }
-  }.bind(this))
+  })
   .catch(function(err){
-    if(err.status && err.status === 404)
-      console.log('Not found:', ref)
-    else
-      console.log('ERR',err)
+    console.error('ERR',err)
   })
 }
 
@@ -89,29 +109,26 @@ module.exports.prototype.remove = function(ref, cb){
 }
 
 module.exports.prototype.ensure = function(packages, cb){
+  console.log('ensure packages', packages)
   this.list(function(err, res){
     if(err)
       cb(err)
     else{
       packages.forEach(function(pkg){
-        // Check if installed
-        if(res.find(function(ipkg){
-          return ipkg.name == pkg.name
-        }))
-          // Check if at desired version
-          if(res.find(function(ipkg){
-            return ipkg.name == pkg.name && ipkg.version == pkg.version
-          }))
-            console.log(pkg.name, 'already up-to-date')
-          else
-            // FIXME: Lookup PKG from Repo
-            this.install([pkg.name, pkg.version].join('@'), function(err, res){
-              if(err)
-                console.log('ERR', err)
-              else
-                console.log(pkg.name, '@', pkg.version, 'installed')
-            })
-      })
+        // Check if installed by matching packages[].pkg.name to this.list[].pkg.name
+        if(res.find(function(ipkg){ return ipkg.name == pkg.name }))
+          console.info(pkg.name, 'already installed')
+        else {
+          console.info(pkg.name, 'installing')
+          // FIXME: Install specified version
+          this.install(pkg.name, function(err, res){
+            if(err)
+              console.error('ERR', err)
+            else
+              console.info(pkg.name, 'installed')
+          })
+        }
+      }.bind(this))
     }
-  })
+  }.bind(this))
 }
